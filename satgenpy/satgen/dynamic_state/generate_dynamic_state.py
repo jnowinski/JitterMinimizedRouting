@@ -29,6 +29,8 @@ from .algorithm_free_one_only_gs_relays import algorithm_free_one_only_gs_relays
 from .algorithm_free_one_only_over_isls import algorithm_free_one_only_over_isls
 from .algorithm_paired_many_only_over_isls import algorithm_paired_many_only_over_isls
 from .algorithm_free_gs_one_sat_many_only_over_isls import algorithm_free_gs_one_sat_many_only_over_isls
+from .algorithm_jitter_minimized import algorithm_jitter_minimized_lookahead
+from .algorithm_lmsr import algorithm_lmsr
 
 
 def generate_dynamic_state(
@@ -47,6 +49,7 @@ def generate_dynamic_state(
                                   # "algorithm_free_one_only_gs_relays"
                                   # "algorithm_free_one_only_over_isls"
                                   # "algorithm_paired_many_only_over_isls"
+                                  # "algorithm_jitter_minimized"
         enable_verbose_logs
 ):
     if offset_ns % time_step_ns != 0:
@@ -65,6 +68,7 @@ def generate_dynamic_state(
             output_dynamic_state_dir,
             epoch,
             time_since_epoch_ns,
+            time_step_ns,
             satellites,
             ground_stations,
             list_isls,
@@ -81,6 +85,7 @@ def generate_dynamic_state_at(
         output_dynamic_state_dir,
         epoch,
         time_since_epoch_ns,
+        time_step_ns,
         satellites,
         ground_stations,
         list_isls,
@@ -91,6 +96,144 @@ def generate_dynamic_state_at(
         prev_output,
         enable_verbose_logs
 ):
+
+    #
+    # Call the dynamic state algorithm which:
+    #
+    # (a) Output the gsl_if_bandwidth_<t>.txt files
+    # (b) Output the fstate_<t>.txt files
+    #
+
+    # Algorithms that handle their own graph generation
+    if dynamic_state_algorithm == "algorithm_jitter_minimized":
+        return algorithm_jitter_minimized_lookahead(
+            output_dynamic_state_dir,
+            time_since_epoch_ns,
+            time_step_ns,
+            satellites,
+            ground_stations,
+            list_gsl_interfaces_info,
+            prev_output,
+            enable_verbose_logs,
+            epoch,
+            list_isls,
+            max_gsl_length_m,
+            max_isl_length_m,
+            generate_graph_state_at,
+        )
+
+    elif dynamic_state_algorithm == "algorithm_lmsr":
+
+        return algorithm_lmsr(
+            output_dynamic_state_dir,
+            time_since_epoch_ns,
+            time_step_ns,
+            satellites,
+            ground_stations,
+            list_gsl_interfaces_info,
+            prev_output,
+            enable_verbose_logs,
+            epoch,
+            list_isls,
+            max_gsl_length_m,
+            max_isl_length_m,
+            generate_graph_state_at,
+        )
+
+    # Generate the current network graph
+    (
+        sat_net_graph_only_satellites_with_isls,
+        sat_net_graph_all_with_only_gsls,
+        ground_station_satellites_in_range,
+        num_isls_per_sat, sat_neighbor_to_if
+    ) = generate_graph_state_at(
+        epoch,
+        time_since_epoch_ns,
+        satellites,
+        ground_stations,
+        list_isls,
+        list_gsl_interfaces_info,
+        max_gsl_length_m,
+        max_isl_length_m,
+        enable_verbose_logs
+    ).values()
+
+    if dynamic_state_algorithm == "algorithm_free_one_only_over_isls":
+
+        return algorithm_free_one_only_over_isls(
+            output_dynamic_state_dir,
+            time_since_epoch_ns,
+            satellites,
+            ground_stations,
+            sat_net_graph_only_satellites_with_isls,
+            ground_station_satellites_in_range,
+            num_isls_per_sat,
+            sat_neighbor_to_if,
+            list_gsl_interfaces_info,
+            prev_output,
+            enable_verbose_logs
+        )
+
+    elif dynamic_state_algorithm == "algorithm_free_gs_one_sat_many_only_over_isls":
+
+        return algorithm_free_gs_one_sat_many_only_over_isls(
+            output_dynamic_state_dir,
+            time_since_epoch_ns,
+            satellites,
+            ground_stations,
+            sat_net_graph_only_satellites_with_isls,
+            ground_station_satellites_in_range,
+            num_isls_per_sat,
+            sat_neighbor_to_if,
+            list_gsl_interfaces_info,
+            prev_output,
+            enable_verbose_logs
+        )
+
+    elif dynamic_state_algorithm == "algorithm_free_one_only_gs_relays":
+
+        return algorithm_free_one_only_gs_relays(
+            output_dynamic_state_dir,
+            time_since_epoch_ns,
+            satellites,
+            ground_stations,
+            sat_net_graph_all_with_only_gsls,
+            num_isls_per_sat,
+            list_gsl_interfaces_info,
+            prev_output,
+            enable_verbose_logs
+        )
+
+    elif dynamic_state_algorithm == "algorithm_paired_many_only_over_isls":
+
+        return algorithm_paired_many_only_over_isls(
+            output_dynamic_state_dir,
+            time_since_epoch_ns,
+            satellites,
+            ground_stations,
+            sat_net_graph_only_satellites_with_isls,
+            ground_station_satellites_in_range,
+            num_isls_per_sat,
+            sat_neighbor_to_if,
+            list_gsl_interfaces_info,
+            prev_output,
+            enable_verbose_logs
+        )
+
+    else:
+        raise ValueError("Unknown dynamic state algorithm: " + str(dynamic_state_algorithm))
+
+
+def generate_graph_state_at(
+        epoch,
+        time_since_epoch_ns,
+        satellites,
+        ground_stations,
+        list_isls,
+        list_gsl_interfaces_info,
+        max_gsl_length_m,
+        max_isl_length_m,
+        enable_verbose_logs):
     if enable_verbose_logs:
         print("FORWARDING STATE AT T = " + (str(time_since_epoch_ns))
               + "ns (= " + str(time_since_epoch_ns / 1e9) + " seconds)")
@@ -215,73 +358,8 @@ def generate_dynamic_state_at(
 
     #################################
 
-    #
-    # Call the dynamic state algorithm which:
-    #
-    # (a) Output the gsl_if_bandwidth_<t>.txt files
-    # (b) Output the fstate_<t>.txt files
-    #
-    if dynamic_state_algorithm == "algorithm_free_one_only_over_isls":
-
-        return algorithm_free_one_only_over_isls(
-            output_dynamic_state_dir,
-            time_since_epoch_ns,
-            satellites,
-            ground_stations,
-            sat_net_graph_only_satellites_with_isls,
-            ground_station_satellites_in_range,
-            num_isls_per_sat,
-            sat_neighbor_to_if,
-            list_gsl_interfaces_info,
-            prev_output,
-            enable_verbose_logs
-        )
-
-    elif dynamic_state_algorithm == "algorithm_free_gs_one_sat_many_only_over_isls":
-
-        return algorithm_free_gs_one_sat_many_only_over_isls(
-            output_dynamic_state_dir,
-            time_since_epoch_ns,
-            satellites,
-            ground_stations,
-            sat_net_graph_only_satellites_with_isls,
-            ground_station_satellites_in_range,
-            num_isls_per_sat,
-            sat_neighbor_to_if,
-            list_gsl_interfaces_info,
-            prev_output,
-            enable_verbose_logs
-        )
-
-    elif dynamic_state_algorithm == "algorithm_free_one_only_gs_relays":
-
-        return algorithm_free_one_only_gs_relays(
-            output_dynamic_state_dir,
-            time_since_epoch_ns,
-            satellites,
-            ground_stations,
-            sat_net_graph_all_with_only_gsls,
-            num_isls_per_sat,
-            list_gsl_interfaces_info,
-            prev_output,
-            enable_verbose_logs
-        )
-
-    elif dynamic_state_algorithm == "algorithm_paired_many_only_over_isls":
-
-        return algorithm_paired_many_only_over_isls(
-            output_dynamic_state_dir,
-            time_since_epoch_ns,
-            satellites,
-            ground_stations,
-            sat_net_graph_only_satellites_with_isls,
-            ground_station_satellites_in_range,
-            num_isls_per_sat,
-            sat_neighbor_to_if,
-            list_gsl_interfaces_info,
-            prev_output,
-            enable_verbose_logs
-        )
-
-    else:
-        raise ValueError("Unknown dynamic state algorithm: " + str(dynamic_state_algorithm))
+    return {'sat_net_graph_only_satellites_with_isls': sat_net_graph_only_satellites_with_isls,
+            'sat_net_graph_all_with_only_gsls': sat_net_graph_all_with_only_gsls,
+            'ground_station_satellites_in_range': ground_station_satellites_in_range,
+            'num_isls_per_sat': num_isls_per_sat,
+            'sat_neighbor_to_if': sat_neighbor_to_if, }
