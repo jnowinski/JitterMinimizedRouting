@@ -1,0 +1,30 @@
+# Python Requirements for Hypatia + JMR/LMSR
+
+# Core scientific computing
+numpy
+astropy
+ephem
+networkx
+sgp4
+geopy
+matplotlib
+statsmodels
+pandas
+
+# Cartography (requires system packages: libproj-dev, proj-data, proj-bin, libgeos-dev)
+cartopy
+
+# Utilities
+git+https://github.com/snkas/exputilpy.git@v1.6
+git+https://github.com/snkas/networkload.git@v1.3
+
+# Development and testing (optional)
+# pytest
+# coverage
+
+# For Jupyter notebooks (optional)
+# jupyter
+# ipython
+
+# Note: JMR/LMSR sliding window cache optimization requires no additional dependencies
+# beyond the Hypatia base requirements listed above.
