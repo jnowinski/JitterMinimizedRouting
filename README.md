@@ -70,9 +70,6 @@ bash hypatia_install_dependencies.sh
 
 # Build Hypatia
 bash hypatia_build.sh
-
-# Optionally test Hypatia
-bash hypatia_run_tests.sh
 ```
 
 ## Running Tests
