@@ -63,15 +63,13 @@ git clone <repository-url>
 cd hypatia
 
 # Install dependencies
-./hypatia_install_dependencies.sh
-
-# Build ns-3 simulator
-cd ns3-sat-sim/simulator
-./build.sh
-cd ../..
+bash hypatia_install_dependencies.sh
 
 # Build Hypatia
-./hypatia_build.sh
+bash hypatia_build.sh
+
+# Optionally test Hypatia
+bash hypatia_run_tests.sh
 ```
 
 ## Running Tests
