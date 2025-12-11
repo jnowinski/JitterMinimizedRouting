@@ -53,9 +53,12 @@ sudo apt-get install -y \
 # Python dependencies
 pip3 install -r requirements.txt
 ```
+
+### Setup
+
 - Python version 3.7-3.11 must be used
 - Depending on the installation method, you may need to [install the basic-sim module](#common-issues)
-### Setup
+- The ns-3 build will produce many warnings about deprecated unary functions, but these can be safely ignored
 
 ```bash
 # Clone the repository
@@ -268,7 +271,7 @@ Cache key: `(source_sat, dest_sat, absolute_timestep)`
 
 **Issue**: Bilding ns-3 fails due to missing `basic-sim` module
 - **Cause**: Hypatia depends on an external module for ns-3 that must be present before building
-- **Solution**: Ensure [the module](https://github.com/snkas/basic-sim/tree/3b32597c183e1039be7f0bede17d36d354696776) is installed at ns3-sat-sim/simulator/contrib
+- **Solution**: Ensure [the module](https://github.com/snkas/basic-sim/tree/3b32597c183e1039be7f0bede17d36d354696776) is properly installed in ns3-sat-sim/simulator/contrib following the instructions in the linked repository
 
 **Issue**: `KeyboardInterrupt` during generation
 - **Cause**: Generation cancelled by user (Ctrl+C)
