@@ -10,7 +10,8 @@ echo "Building ns3-sat-sim..."
 cd ns3-sat-sim || exit 1
 # Can be skipped by travis as building is also called in running of tests
 if [ "$1" != "--travis" ]; then
-  bash build.sh --debug_all || exit 1
+  # bash build.sh --debug_all || exit 1
+  bash build.sh --optimized || exit 1
   # For optimized: bash build.sh --optimized || exit 1
 fi
 cd .. || exit 1

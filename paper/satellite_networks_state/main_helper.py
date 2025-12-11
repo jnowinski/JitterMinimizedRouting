@@ -24,6 +24,12 @@ import sys
 sys.path.append("../../satgenpy")
 import satgen
 import os
+import math
+from satgen.isls import *
+from satgen.ground_stations import *
+from satgen.tles import *
+from satgen.interfaces import *
+from satgen.dynamic_state.generate_dynamic_state import generate_dynamic_state
 
 
 class MainHelper:
@@ -58,11 +64,11 @@ class MainHelper:
 
     def calculate(
             self,
-            output_generated_data_dir,      # Final directory in which the result will be placed
+            output_generated_data_dir,  # Final directory in which the result will be placed
             duration_s,
             time_step_ms,
-            isl_selection,            # isls_{none, plus_grid}
-            gs_selection,             # ground_stations_{top_100, paris_moscow_grid}
+            isl_selection,  # isls_{none, plus_grid}
+            gs_selection,  # ground_stations_{top_100, paris_moscow_grid}
             dynamic_state_algorithm,  # algorithm_{free_one_only_{gs_relays,_over_isls}, paired_many_only_over_isls}
             num_threads
     ):
@@ -137,7 +143,9 @@ class MainHelper:
         if dynamic_state_algorithm == "algorithm_free_one_only_gs_relays" \
                 or dynamic_state_algorithm == "algorithm_free_one_only_over_isls":
             gsl_interfaces_per_satellite = 1
-        elif dynamic_state_algorithm == "algorithm_paired_many_only_over_isls":
+        elif dynamic_state_algorithm == "algorithm_paired_many_only_over_isls" \
+                or dynamic_state_algorithm == "algorithm_jitter_minimized" \
+                or dynamic_state_algorithm == "algorithm_lmsr":
             gsl_interfaces_per_satellite = len(ground_stations)
         else:
             raise ValueError("Unknown dynamic state algorithm: " + dynamic_state_algorithm)
@@ -149,20 +157,61 @@ class MainHelper:
             len(ground_stations),
             gsl_interfaces_per_satellite,  # GSL interfaces per satellite
             1,  # (GSL) Interfaces per ground station
-            1,  # Aggregate max. bandwidth satellite (unit unspecified)
-            1   # Aggregate max. bandwidth ground station (same unspecified unit)
+            1 * gsl_interfaces_per_satellite,  # Aggregate max. bandwidth satellite (unit unspecified)
+            1  # Aggregate max. bandwidth ground station (same unspecified unit)
         )
 
         # Forwarding state
         print("Generating forwarding state...")
-        satgen.help_dynamic_state(
-            output_generated_data_dir,
-            num_threads,  # Number of threads
-            name,
-            time_step_ms,
-            duration_s,
-            self.MAX_GSL_LENGTH_M,
-            self.MAX_ISL_LENGTH_M,
-            dynamic_state_algorithm,
-            True
-        )
+        if dynamic_state_algorithm == "algorithm_jitter_minimized" \
+                or dynamic_state_algorithm == "algorithm_lmsr":
+            # Directory
+            output_dynamic_state_dir = output_generated_data_dir + "/" + name + "/dynamic_state_" + str(time_step_ms) \
+                                       + "ms_for_" + str(duration_s) + "s"
+            if not os.path.isdir(output_dynamic_state_dir):
+                os.makedirs(output_dynamic_state_dir)
+
+            # In nanoseconds
+            simulation_end_time_ns = duration_s * 1000 * 1000 * 1000
+            time_step_ns = time_step_ms * 1000 * 1000
+
+            num_calculations = math.floor(simulation_end_time_ns / time_step_ns)
+
+            # Variables (load in for each thread such that they don't interfere)
+            tles = read_tles(output_generated_data_dir + "/" + name + "/tles.txt")
+            satellites = tles["satellites"]
+            list_isls = read_isls(output_generated_data_dir + "/" + name + "/isls.txt", len(satellites))
+            list_gsl_interfaces_info = read_gsl_interfaces_info(
+                output_generated_data_dir + "/" + name + "/gsl_interfaces_info.txt",
+                len(satellites),
+                len(ground_stations)
+            )
+            epoch = tles["epoch"]
+
+            generate_dynamic_state(
+                output_dynamic_state_dir,
+                epoch,
+                simulation_end_time_ns,
+                time_step_ns,
+                0,
+                satellites,
+                ground_stations,
+                list_isls,
+                list_gsl_interfaces_info,
+                self.MAX_GSL_LENGTH_M,
+                self.MAX_ISL_LENGTH_M,
+                dynamic_state_algorithm,
+                True
+            )
+        else:
+            satgen.help_dynamic_state(
+                output_generated_data_dir,
+                num_threads,  # Number of threads
+                name,
+                time_step_ms,
+                duration_s,
+                self.MAX_GSL_LENGTH_M,
+                self.MAX_ISL_LENGTH_M,
+                dynamic_state_algorithm,
+                True
+            )

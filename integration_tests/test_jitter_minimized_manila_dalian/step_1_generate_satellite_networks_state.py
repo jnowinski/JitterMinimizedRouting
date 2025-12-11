@@ -6,6 +6,7 @@ sys.path.append("../../satgenpy")
 import satgen
 import math
 import exputil
+import time
 
 # WGS72 value
 EARTH_RADIUS = 6378135.0
@@ -40,11 +41,15 @@ name = "kuiper_630_isls_" + dynamic_state_algorithm
 # Ground stations
 print("Generating ground stations...")
 local_shell.make_full_dir(output_generated_data_dir + "/" + name)
-with open(output_generated_data_dir + "/" + name + "/ground_stations.basic.txt", "w+") as f_out:
-    f_out.write("0,Manila,14.6042,120.9822,0\n")
-    f_out.write("1,Dalian,38.913811,121.602322,0\n")
+# with open(output_generated_data_dir + "/" + name + "/ground_stations.basic.txt", "w+") as f_out:
+#     f_out.write("0,Manila,14.6042,120.9822,0\n")
+#     f_out.write("1,Dalian,38.913811,121.602322,0\n")
+# satgen.extend_ground_stations(
+#     output_generated_data_dir + "/" + name + "/ground_stations.basic.txt",
+#     output_generated_data_dir + "/" + name + "/ground_stations.txt"
+# )
 satgen.extend_ground_stations(
-    output_generated_data_dir + "/" + name + "/ground_stations.basic.txt",
+    "../../paper/satellite_networks_state/input_data/ground_stations_cities_sorted_by_estimated_2025_pop_top_100.basic.txt",
     output_generated_data_dir + "/" + name + "/ground_stations.txt"
 )
 
@@ -102,6 +107,7 @@ satgen.generate_simple_gsl_interfaces_info(
 
 # Forwarding state with jitter-minimized algorithm
 print("Generating forwarding state with jitter-minimized routing...")
+start_time = time.time()
 satgen.help_dynamic_state(
     output_generated_data_dir,
     num_threads,
@@ -113,5 +119,25 @@ satgen.help_dynamic_state(
     dynamic_state_algorithm,
     True  # Enable verbose logging to see sat-to-sat entry generation
 )
+end_time = time.time()
+elapsed = end_time - start_time
+
+print("\n" + "=" * 60)
+print("BENCHMARK RESULTS - Anchor-based LMSR")
+print("=" * 60)
+print(f"Total execution time: {elapsed:.2f} seconds ({elapsed / 60:.2f} minutes)")
+print(f"Time per timestep: {elapsed / 100:.3f} seconds")
+print(f"Algorithm: algorithm_jitter_minimized (60 anchors)")
+print(f"Complexity: O(N × (V log V + E))")
+print("=" * 60)
+
+# Write timing to file
+with open("temp/gen_data/benchmark_anchor_lmsr.txt", "w") as f:
+    f.write(f"Algorithm: Anchor-based LMSR\n")
+    f.write(f"Total time: {elapsed:.2f} seconds\n")
+    f.write(f"Time per timestep: {elapsed / 100:.3f} seconds\n")
+    f.write(f"Timesteps: 100\n")
+    f.write(f"Satellites: 630\n")
+    f.write(f"Anchors: 60\n")
 
 print("Done!")

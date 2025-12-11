@@ -492,14 +492,14 @@ def calculate_anchor_lmsr_path_complete_forwarding(
     
     def route_through_anchors_lmsr(source_sat, dest_sat, current_timestep=0):
         """
-        LMSR: Minimize maximum distance across all timesteps
-        BUT: Route using CURRENT timestep's topology
-        Returns: (next_hop, max_distance)
+        LMSR with Jitter Minimization: Minimize delay variance across timesteps
+        Route using CURRENT timestep's topology
+        Returns: (next_hop, jitter_metric)
         """
         if source_sat == dest_sat:
             return dest_sat, 0.0
         
-        # Compute distances across all timesteps to find worst case
+        # Compute distances across all timesteps
         distances_across_time = [
             compute_anchor_path_distance_at_timestep(source_sat, dest_sat, t)
             for t in range(len(sat_net_graph_only_satellites_with_isls))
@@ -508,8 +508,10 @@ def calculate_anchor_lmsr_path_complete_forwarding(
         if any(math.isinf(d) for d in distances_across_time):
             return None, float('inf')
         
-        # Find worst-case distance (for LMSR criterion)
+        # Calculate jitter: range of delays (max - min)
+        min_distance = min(distances_across_time)
         max_distance = max(distances_across_time)
+        jitter_metric = max_distance - min_distance
         
         # BUT: Use CURRENT timestep for actual routing decision
         # This ensures the next hop exists in the current ISL topology
@@ -525,6 +527,7 @@ def calculate_anchor_lmsr_path_complete_forwarding(
             print(f"      route_through_anchors_lmsr({source_sat}, {dest_sat}):")
             print(f"        ingress_anchor={ingress_anchor}, egress_anchor={egress_anchor}")
             print(f"        ingress_path={ingress_path}, egress_path={egress_path}")
+            print(f"        jitter_metric={jitter_metric:.2f}m (range: {min_distance:.2f}-{max_distance:.2f})")
         
         # Determine next hop using CURRENT timestep topology
         # NOTE: Paths are stored as [anchor, ..., node] from multi-source Dijkstra
@@ -575,7 +578,7 @@ def calculate_anchor_lmsr_path_complete_forwarding(
         if debug_routing:
             print(f"        next_hop={next_hop}")
         
-        return next_hop, max_distance
+        return next_hop, jitter_metric
     
     # Generate forwarding state
     fstate = {}
@@ -617,8 +620,14 @@ def calculate_anchor_lmsr_path_complete_forwarding(
                     ]
                     
                     if not any(math.isinf(d) for d in distances_across_time):
+                        # Calculate jitter: range of delays (max - min)
+                        min_distance = min(distances_across_time)
                         max_distance = max(distances_across_time)
-                        possibilities.append((max_distance + gsl_distance, dst_sat))
+                        jitter = max_distance - min_distance
+                        mean_distance = sum(distances_across_time) / len(distances_across_time)
+                        
+                        # Primary: minimize jitter, Secondary: minimize mean delay
+                        possibilities.append((jitter, mean_distance + gsl_distance, dst_sat))
                     elif curr_sat == 0 and dst_gid == 1:  # Debug: satellite 0 to Dalian
                         print(f"      DEBUG: Sat {curr_sat} → Sat {dst_sat} (can see GS {dst_gid}): Has inf distance")
                         print(f"        Distances across time: {distances_across_time[:3]}...")
@@ -629,7 +638,7 @@ def calculate_anchor_lmsr_path_complete_forwarding(
                 if curr_sat == 0 and dst_gid == 1:
                     print(f"    DEBUG: Satellite 0 routing to GS 1 (Dalian): {len(possibilities)} valid possibilities")
                     if len(possibilities) > 0:
-                        print(f"      Best: distance={possibilities[0][0]}, via sat {possibilities[0][1]}")
+                        print(f"      Best: jitter={possibilities[0][0]}, mean_distance={possibilities[0][1]}, via sat {possibilities[0][2]}")
                     else:
                         print(f"      NO VALID ROUTES!")
                         print(f"      Checked {len(possible_dst_sats)} satellites that can see Dalian")
@@ -639,8 +648,8 @@ def calculate_anchor_lmsr_path_complete_forwarding(
                 distance_to_ground_station_m = float('inf')
                 
                 if possibilities:
-                    _, dst_sat = possibilities[0]
-                    distance_to_ground_station_m = possibilities[0][0]
+                    _, mean_dist, dst_sat = possibilities[0]
+                    distance_to_ground_station_m = mean_dist
                     
                     if curr_sat != dst_sat:
                         # Use anchor-based routing with loop prevention
@@ -726,7 +735,93 @@ def calculate_anchor_lmsr_path_complete_forwarding(
     return fstate, anchor_data_by_timestep[1:]
 
 
-def calculate_lmsr_path_without_gs_relaying(
+import math
+import networkx as nx
+from heapq import heappush, heappop
+
+
+def find_k_shortest_paths(graph, source, target, k=3, weight='weight'):
+    """
+    Yen's algorithm for finding k-shortest loopless paths.
+    Returns list of paths, each path is a list of node IDs.
+    """
+    try:
+        # First shortest path
+        path = nx.shortest_path(graph, source, target, weight=weight)
+        length = sum(graph[path[i]][path[i+1]].get(weight, 1.0) for i in range(len(path)-1))
+        A = [(length, path)]
+    except nx.NetworkXNoPath:
+        return []
+    
+    B = []  # Heap of candidate paths
+    
+    for k_iter in range(1, k):
+        prev_path = A[-1][1]
+        
+        for i in range(len(prev_path) - 1):
+            spur_node = prev_path[i]
+            root_path = prev_path[:i+1]
+            
+            # Create temporary graph
+            temp_graph = graph.copy()
+            
+            # Remove edges from previous paths sharing this root
+            edges_to_remove = []
+            for path_len, path in A:
+                if len(path) > i and path[:i+1] == root_path and i+1 < len(path):
+                    edges_to_remove.append((path[i], path[i+1]))
+            
+            temp_graph.remove_edges_from(edges_to_remove)
+            
+            # Remove root path nodes (except spur)
+            temp_graph.remove_nodes_from(root_path[:-1])
+            
+            try:
+                spur_path = nx.shortest_path(temp_graph, spur_node, target, weight=weight)
+                
+                # Combine root + spur
+                total_path = root_path[:-1] + spur_path
+                
+                # Calculate total length
+                total_length = sum(graph[total_path[j]][total_path[j+1]].get(weight, 1.0) 
+                                 for j in range(len(total_path)-1))
+                
+                if (total_length, total_path) not in B and (total_length, total_path) not in A:
+                    heappush(B, (total_length, total_path))
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                continue
+        
+        if not B:
+            break
+        
+        A.append(heappop(B))
+    
+    return [path for length, path in A]
+
+
+def calculate_path_delay_sequence(path, sat_net_graphs, weight='weight'):
+    """
+    Calculate delay sequence D = {D1, D2, ..., Dn} for a path across timesteps.
+    Returns (delay_sequence, valid) where valid=True if path exists in all timesteps.
+    """
+    delays = []
+    
+    for graph in sat_net_graphs:
+        total_delay = 0
+        for i in range(len(path) - 1):
+            if not graph.has_edge(path[i], path[i+1]):
+                return [], False
+            total_delay += graph[path[i]][path[i+1]].get(weight, 1.0)
+        delays.append(total_delay)
+    
+    return delays, True
+
+
+# Global cache for k-shortest paths across all timesteps (sliding window)
+# Key: (src, dst, absolute_timestep) -> [path1, path2, path3]
+_global_k_paths_cache = {}
+
+def calculate_lmsr(
         output_dynamic_state_dir,
         time_since_epoch_ns,
         num_satellites,
@@ -738,157 +833,354 @@ def calculate_lmsr_path_without_gs_relaying(
         sat_neighbor_to_if,
         prev_fstate,
         prev_dist_sat_nets_without_gs,
-        enable_verbose_logs
+        enable_verbose_logs,
+        k_paths=3
 ):
-    # Calculate the shortest path distances
+    """
+    LMSR (Low-jitter Multiple Slots Routing) with k-shortest paths and delay equalization.
+    
+    Paper: S. Sun et al., "LMSR: A Low-Jitter Multiple Slots Routing Algorithm in LEO 
+    Satellite Networks", WCNC 2025.
+    
+    Algorithm:
+    1. For each flow, find k-shortest candidate paths using Yen's algorithm at each timestep
+    2. For each candidate path i, compute delay D_i(t) at each timestep t
+    3. Select path_selection[t] for each timestep to minimize max(D) - min(D):
+       - Find timestep with maximum of minimum delays (the "anchor" timestep)
+       - For each timestep, pick candidate path closest to the anchor delay
+       - This equalizes delays across the time horizon
+    4. Use path_selection[current_timestep] to determine next hop
+    """
+    
+    print(f"  > ENTERED calculate_lmsr function")
+    print(f"  > enable_verbose_logs={enable_verbose_logs}")
+    
     if enable_verbose_logs:
-        print("  > Generating for all LMSR states")
-    # (Note: Numpy has a deprecation warning here because of how networkx uses matrices)
-    # TODO: Use previous floyd-warshall output (prevent recalculation)
-    dist_sat_net_without_gs = prev_dist_sat_nets_without_gs
-    if dist_sat_net_without_gs is not None:
-        print(f'  > Reusing previous {len(dist_sat_net_without_gs)} states')
-        dist_sat_net_without_gs.append(nx.floyd_warshall_numpy(sat_net_graph_only_satellites_with_isls[-1]))
-    else:
-        print(f'  > Generating for all {len(sat_net_graph_only_satellites_with_isls)} states')
-        dist_sat_net_without_gs = [nx.floyd_warshall_numpy(graph) for graph in sat_net_graph_only_satellites_with_isls]
-
-    # Forwarding state
+        print(f"  > LMSR: Computing {k_paths}-shortest paths with jitter equalization across time")
+        print(f"  > Graph type check: {type(sat_net_graph_only_satellites_with_isls)}")
+        print(f"  > Lookahead window: {len(sat_net_graph_only_satellites_with_isls)} timesteps")
+        print(f"  > Network: {num_satellites} satellites, {num_ground_stations} ground stations")
+    
+    # Validate input
+    if not isinstance(sat_net_graph_only_satellites_with_isls, list):
+        raise ValueError(f"Expected list of graphs, got {type(sat_net_graph_only_satellites_with_isls)}")
+    
+    num_timesteps = len(sat_net_graph_only_satellites_with_isls)
+    current_timestep_idx = 0
     fstate = {}
-
-    # Now write state to file for complete graph
-    output_filename = output_dynamic_state_dir + "/fstate_" + str(time_since_epoch_ns) + ".txt"
+    
+    # Calculate absolute timestep (in seconds since epoch)
+    current_absolute_timestep = time_since_epoch_ns // 1000000000
+    
     if enable_verbose_logs:
-        print("  > Writing forwarding state to: " + output_filename)
-    with open(output_filename, "w+") as f_out:
-
-        # Satellites to ground stations
-        # From the satellites attached to the destination ground station,
-        # select the one which promises the shortest path to the destination ground station (getting there + last hop)
-        dist_satellite_to_ground_station = {}
-        for curr in range(num_satellites):
-            for dst_gid in range(num_ground_stations):
-                dst_gs_node_id = num_satellites + dst_gid
-
-                # Among the satellites in range of the destination ground station,
-                # find the one which promises the shortest distance
-                possible_dst_sats = ground_station_satellites_in_range_candidates[0][dst_gid]
-                possibilities = []
-                max_length_index = -1
-                for b in possible_dst_sats:
-                    # All timesteps must be reachable
-                    lengths = [dist_sat_net_without_gs[i][curr][b[1]] for i in
-                               range(len(sat_net_graph_only_satellites_with_isls))]
-                    if not any(math.isinf(lengths[i]) for i in range(len(sat_net_graph_only_satellites_with_isls))):
-                        max_length = -1
-                        for i in range(len(lengths)):
-                            if lengths[i] > max_length:
-                                max_length = lengths[i]
-                                max_length_index = i
-                        possibilities.append(
-                            (
-                                max_length + b[0],
-                                b[1]
-                            )
+        print(f"  > Validated: {num_timesteps} graph objects in lookahead window")
+        print(f"  > Current absolute timestep: {current_absolute_timestep}")
+        print(f"  > Global k-paths cache size: {len(_global_k_paths_cache)} entries")
+    
+    # OPTIMIZATION: Sliding window cache for k-shortest paths
+    # Only compute paths for timesteps not already in global cache
+    
+    # Identify unique destination satellites for this window
+    unique_dst_satellites = set()
+    for t in range(num_timesteps):
+        for gid in range(num_ground_stations):
+            for _, sat_id in ground_station_satellites_in_range_candidates[t][gid]:
+                unique_dst_satellites.add(sat_id)
+    
+    if enable_verbose_logs:
+        print(f"  > Found {len(unique_dst_satellites)} unique destination satellites in this window")
+    
+    # Compute paths only for new timesteps (sliding window approach)
+    new_computations = 0
+    cache_hits = 0
+    
+    for t in range(num_timesteps):
+        absolute_t = current_absolute_timestep + t
+        
+        for src in range(num_satellites):
+            for dst in unique_dst_satellites:
+                if src != dst:
+                    cache_key = (src, dst, absolute_t)
+                    
+                    if cache_key not in _global_k_paths_cache:
+                        # Cache miss - compute and store
+                        _global_k_paths_cache[cache_key] = find_k_shortest_paths(
+                            sat_net_graph_only_satellites_with_isls[t],
+                            src, dst, k=k_paths
                         )
-                possibilities = list(sorted(possibilities))
-
-                # By default, if there is no satellite in range for the
-                # destination ground station, it will be dropped (indicated by -1)
-                next_hop_decision = (-1, -1, -1)
-                distance_to_ground_station_m = float("inf")
-                if len(possibilities) > 0:
-                    dst_sat = possibilities[0][1]
-                    distance_to_ground_station_m = possibilities[0][0]
-
-                    # If the current node is not that satellite, determine how to get to the satellite
-                    if curr != dst_sat:
-
-                        # Among its neighbors, find the one which promises the
-                        # lowest distance to reach the destination satellite
-                        best_distance_m = float("inf")
-                        for neighbor_id in sat_net_graph_only_satellites_with_isls[0].neighbors(curr):
-                            distance_m = (
-                                    sat_net_graph_only_satellites_with_isls[0].edges[(curr, neighbor_id)]["weight"]
-                                    +
-                                    max([dist_sat_net_without_gs[i][neighbor_id][dst_sat] for i in
-                                         range(len(sat_net_graph_only_satellites_with_isls))])
-                            )
-                            if distance_m < best_distance_m:
-                                next_hop_decision = (
-                                    neighbor_id,
-                                    sat_neighbor_to_if[0][(curr, neighbor_id)],
-                                    sat_neighbor_to_if[0][(neighbor_id, curr)]
-                                )
-                                best_distance_m = distance_m
-
+                        new_computations += 1
                     else:
-                        # This is the destination satellite, as such the next hop is the ground station itself
-                        next_hop_decision = (
-                            dst_gs_node_id,
-                            num_isls_per_sat[0][dst_sat] + gid_to_sat_gsl_if_idx[dst_gid],
-                            0
-                        )
-
-                # In any case, save the distance of the satellite to the ground station to re-use
-                # when we calculate ground station to ground station forwarding
-                dist_satellite_to_ground_station[(curr, dst_gs_node_id)] = distance_to_ground_station_m
-
-                # Write to forwarding state
-                if not prev_fstate or prev_fstate[(curr, dst_gs_node_id)] != next_hop_decision:
-                    f_out.write("%d,%d,%d,%d,%d\n" % (
-                        curr,
-                        dst_gs_node_id,
-                        next_hop_decision[0],
-                        next_hop_decision[1],
-                        next_hop_decision[2]
-                    ))
-                fstate[(curr, dst_gs_node_id)] = next_hop_decision
-
-        # Ground stations to ground stations
-        # Choose the source satellite which promises the shortest path
-        for src_gid in range(num_ground_stations):
-            for dst_gid in range(num_ground_stations):
-                if src_gid != dst_gid:
-                    src_gs_node_id = num_satellites + src_gid
-                    dst_gs_node_id = num_satellites + dst_gid
-
-                    # Among the satellites in range of the source ground station,
-                    # find the one which promises the shortest distance
-                    possible_src_sats = ground_station_satellites_in_range_candidates[0][src_gid]
-                    possibilities = []
-                    for a in possible_src_sats:
-                        best_distance_offered_m = dist_satellite_to_ground_station[(a[1], dst_gs_node_id)]
-                        if not math.isinf(best_distance_offered_m):
-                            possibilities.append(
-                                (
-                                    a[0] + best_distance_offered_m,
-                                    a[1]
-                                )
-                            )
-                    possibilities = sorted(possibilities)
-
-                    # By default, if there is no satellite in range for one of the
-                    # ground stations, it will be dropped (indicated by -1)
-                    next_hop_decision = (-1, -1, -1)
-                    if len(possibilities) > 0:
-                        src_sat_id = possibilities[0][1]
-                        next_hop_decision = (
-                            src_sat_id,
-                            0,
-                            num_isls_per_sat[0][src_sat_id] + gid_to_sat_gsl_if_idx[src_gid]
-                        )
-
-                    # Update forwarding state
-                    if not prev_fstate or prev_fstate[(src_gs_node_id, dst_gs_node_id)] != next_hop_decision:
-                        f_out.write("%d,%d,%d,%d,%d\n" % (
-                            src_gs_node_id,
-                            dst_gs_node_id,
-                            next_hop_decision[0],
-                            next_hop_decision[1],
-                            next_hop_decision[2]
-                        ))
-                    fstate[(src_gs_node_id, dst_gs_node_id)] = next_hop_decision
-
-    # Finally return result
-    return fstate, dist_sat_net_without_gs[1:]
+                        cache_hits += 1
+    
+    if enable_verbose_logs:
+        print(f"  > K-paths cache: {cache_hits} hits, {new_computations} new computations")
+        print(f"  > Global cache now contains {len(_global_k_paths_cache)} path sets")
+    
+    # Progress tracking
+    current_timestep_seconds = time_since_epoch_ns // 1000000000
+    
+    #################################
+    # SATELLITE TO GROUND STATION
+    #################################
+    
+    if enable_verbose_logs:
+        print(f"  > Computing satellite-to-ground-station forwarding entries...")
+    
+    sat_progress = 0
+    for curr in range(num_satellites):
+        # Progress indicator after each satellite (disabled for cleaner output)
+        # if enable_verbose_logs:
+        #     print(f"    Processing satellite {curr}/{num_satellites} ({100*curr//num_satellites}%)")
+        for dst_gid in range(num_ground_stations):
+            dst_node_id = num_satellites + dst_gid
+            
+            # Find satellites in range at current timestep
+            dst_sats_in_range = ground_station_satellites_in_range_candidates[current_timestep_idx][dst_gid]
+            
+            if not dst_sats_in_range:
+                continue
+            
+            # Find best destination satellite
+            best_dst_sat = None
+            best_initial_dist = float('inf')
+            
+            for sat_distance, sat_id in dst_sats_in_range:
+                try:
+                    sat_dist = nx.shortest_path_length(
+                        sat_net_graph_only_satellites_with_isls[current_timestep_idx],
+                        curr, sat_id, weight='weight'
+                    )
+                    total_dist = sat_dist + sat_distance
+                    if total_dist < best_initial_dist:
+                        best_initial_dist = total_dist
+                        best_dst_sat = sat_id
+                except nx.NetworkXNoPath:
+                    continue
+            
+            if best_dst_sat is None or curr == best_dst_sat:
+                if curr == best_dst_sat:
+                    my_if_idx = num_isls_per_sat[current_timestep_idx][curr] + gid_to_sat_gsl_if_idx[dst_gid]
+                    # Forward: satellite directly to GS
+                    fstate[(curr, dst_node_id)] = (dst_node_id, my_if_idx, 0)
+                    # Reverse: GS directly back to satellite
+                    fstate[(dst_node_id, curr)] = (curr, 0, my_if_idx)
+                continue
+            
+            # For each timestep, find k-shortest paths and their delays
+            # timestep_candidates[t] = [(path, delay), ...]
+            timestep_candidates = []
+            
+            # Debug output for first satellite
+            if enable_verbose_logs and curr == 0:
+                print(f"      Satellite 0 → GS {dst_gid}: Using precomputed k-shortest paths (instant lookup)")
+            
+            for t in range(num_timesteps):
+                # Use sliding window cache with absolute timesteps
+                absolute_t = current_absolute_timestep + t
+                cache_key = (curr, best_dst_sat, absolute_t)
+                k_paths_list = _global_k_paths_cache.get(cache_key, [])
+                
+                # Calculate delay for each path at this timestep
+                candidates = []
+                for path in k_paths_list:
+                    if len(path) < 2:
+                        continue
+                    # Calculate delay of this path at timestep t
+                    delay = 0.0
+                    valid = True
+                    for i in range(len(path) - 1):
+                        if not sat_net_graph_only_satellites_with_isls[t].has_edge(path[i], path[i+1]):
+                            valid = False
+                            break
+                        delay += sat_net_graph_only_satellites_with_isls[t][path[i]][path[i+1]].get('weight', 1.0)
+                    
+                    if valid:
+                        candidates.append((path, delay))
+                
+                timestep_candidates.append(candidates)
+            
+            # Check if we have candidates at all timesteps
+            if not all(timestep_candidates):
+                continue
+            
+            # JITTER MINIMIZATION ALGORITHM:
+            # 1. Find the timestep with the maximum of minimum delays (the "anchor")
+            min_delays_per_timestep = [min(delay for _, delay in candidates) for candidates in timestep_candidates]
+            anchor_timestep = min_delays_per_timestep.index(max(min_delays_per_timestep))
+            anchor_delay = min_delays_per_timestep[anchor_timestep]
+            
+            # 2. For each timestep, select the path whose delay is closest to anchor_delay
+            selected_paths = []
+            for t, candidates in enumerate(timestep_candidates):
+                best_path = None
+                best_diff = float('inf')
+                for path, delay in candidates:
+                    diff = abs(delay - anchor_delay)
+                    if diff < best_diff:
+                        best_diff = diff
+                        best_path = path
+                selected_paths.append(best_path)
+            
+            # 3. Use the selected path at current timestep for forwarding
+            current_path = selected_paths[current_timestep_idx]
+            if current_path and len(current_path) >= 2:
+                next_hop = current_path[1]
+                my_if_idx = sat_neighbor_to_if[current_timestep_idx][(curr, next_hop)]
+                # Forward route: satellite -> ground station
+                fstate[(curr, dst_node_id)] = (next_hop, my_if_idx, sat_neighbor_to_if[current_timestep_idx][(next_hop, curr)])
+                
+                # Reverse routes: each satellite on the path needs to know how to route BACK to the source satellite
+                # Path is: curr -> sat1 -> sat2 -> ... -> satN -> GS
+                # Reverse: GS -> satN (done below), satN -> ... -> sat2 -> sat1 -> curr
+                
+                # GS to last satellite on path
+                last_sat = current_path[-1]  # Last satellite before GS
+                gsl_if_idx = num_isls_per_sat[current_timestep_idx][last_sat] + gid_to_sat_gsl_if_idx[dst_gid]
+                fstate[(dst_node_id, curr)] = (last_sat, 0, gsl_if_idx)  # GS interface is always 0
+                
+                # Each satellite on the path routes back toward curr
+                for i in range(len(current_path) - 1, 0, -1):
+                    from_sat = current_path[i]  # Current position on reverse path
+                    to_sat = current_path[i - 1]  # Next hop toward curr
+                    my_if_idx = sat_neighbor_to_if[current_timestep_idx][(from_sat, to_sat)]
+                    their_if_idx = sat_neighbor_to_if[current_timestep_idx][(to_sat, from_sat)]
+                    # Each satellite routes TO the original source satellite (curr)
+                    fstate[(from_sat, curr)] = (to_sat, my_if_idx, their_if_idx)
+    
+    #################################
+    # GROUND STATION TO GROUND STATION
+    #################################
+    
+    if enable_verbose_logs:
+        print(f"  > Computing ground-station-to-ground-station forwarding entries...")
+    
+    # Cache to reuse path computations: (sat_a, sat_b) -> (jitter, best_delays_per_timestep)
+    # Since graph is undirected, (A,B) and (B,A) have same jitter
+    sat_pair_cache = {}
+    
+    for src_gid in range(num_ground_stations):
+        src_node_id = num_satellites + src_gid
+        
+        if enable_verbose_logs:
+            print(f"    Processing GS {src_gid} → all destinations...")
+        
+        for dst_gid in range(num_ground_stations):
+            if src_gid == dst_gid:
+                continue
+            
+            dst_node_id = num_satellites + dst_gid
+            
+            # Find satellites in range at current timestep
+            src_sats_in_range = ground_station_satellites_in_range_candidates[current_timestep_idx][src_gid]
+            dst_sats_in_range = ground_station_satellites_in_range_candidates[current_timestep_idx][dst_gid]
+            
+            # If either GS has no coverage, create a placeholder route
+            # ns-3 requires all routes to exist even if they won't be used
+            if not src_sats_in_range:
+                # No satellites in range of source GS - create placeholder to sat 0
+                # Packets sent will be dropped but ns-3 won't crash during initialization
+                fstate[(src_node_id, dst_node_id)] = (0, 0, 4)  # Route via sat 0
+                continue
+                
+            if not dst_sats_in_range:
+                # Source has coverage but dest doesn't - route to closest satellite from source
+                # The packet will reach the satellite but destination GS is unreachable
+                best_src_sat = src_sats_in_range[0][1]  # Closest satellite to src
+                fstate[(src_node_id, dst_node_id)] = (
+                    best_src_sat, 0,
+                    num_isls_per_sat[current_timestep_idx][best_src_sat] + gid_to_sat_gsl_if_idx[src_gid]
+                )
+                continue
+            
+            # Find best (src_sat, dst_sat) pair using LMSR jitter minimization
+            best_src_sat = None
+            best_jitter = float('inf')
+            
+            for src_sat_dist, src_sat in src_sats_in_range[:k_paths]:
+                for dst_sat_dist, dst_sat in dst_sats_in_range[:k_paths]:
+                    # Check cache for this satellite pair (bidirectional)
+                    cache_key = tuple(sorted([src_sat, dst_sat]))
+                    
+                    if cache_key in sat_pair_cache:
+                        jitter = sat_pair_cache[cache_key]
+                    else:
+                        # For each timestep, find k-shortest paths between satellites
+                        timestep_candidates = []
+                        
+                        for t in range(num_timesteps):
+                            # Use sliding window cache with absolute timesteps
+                            absolute_t = current_absolute_timestep + t
+                            cache_key = (src_sat, dst_sat, absolute_t)
+                            k_paths_list = _global_k_paths_cache.get(cache_key, [])
+                            
+                            candidates = []
+                            for path in k_paths_list:
+                                if len(path) < 2:
+                                    continue
+                                delay = 0.0
+                                valid = True
+                                for i in range(len(path) - 1):
+                                    if not sat_net_graph_only_satellites_with_isls[t].has_edge(path[i], path[i+1]):
+                                        valid = False
+                                        break
+                                    delay += sat_net_graph_only_satellites_with_isls[t][path[i]][path[i+1]].get('weight', 1.0)
+                                
+                                if valid:
+                                    candidates.append((path, delay))
+                            
+                            timestep_candidates.append(candidates)
+                        
+                        # Check if we have candidates at all timesteps
+                        if not all(timestep_candidates):
+                            continue
+                        
+                        # Apply jitter minimization
+                        min_delays = [min(delay for _, delay in candidates) for candidates in timestep_candidates]
+                        anchor_timestep = min_delays.index(max(min_delays))
+                        anchor_delay = min_delays[anchor_timestep]
+                        
+                        # Select paths to equalize delays
+                        selected_delays = []
+                        for candidates in timestep_candidates:
+                            best_delay = min(candidates, key=lambda x: abs(x[1] - anchor_delay))[1]
+                            selected_delays.append(best_delay)
+                        
+                        # Calculate jitter after path selection
+                        jitter = max(selected_delays) - min(selected_delays)
+                        
+                        # Cache the result (bidirectional)
+                        sat_pair_cache[cache_key] = jitter
+                    
+                    if jitter < best_jitter:
+                        best_jitter = jitter
+                        best_src_sat = src_sat
+            
+            # Set forwarding entry for GS→GS
+            if best_src_sat is not None:
+                # Forward route: src_gs → best_src_sat → ... → dst_gs
+                fstate[(src_node_id, dst_node_id)] = (
+                    best_src_sat, 0,
+                    num_isls_per_sat[current_timestep_idx][best_src_sat] + gid_to_sat_gsl_if_idx[src_gid]
+                )
+                
+                # We also need the reverse GS→GS route, but it will be computed 
+                # when we process dst_gid → src_gid, so no need to add it here
+                # (the loop will naturally create both directions)
+    
+    # Write forwarding state to file
+    output_filename = output_dynamic_state_dir + "/fstate_" + str(time_since_epoch_ns) + ".txt"
+    
+    if enable_verbose_logs:
+        current_timestep_seconds = time_since_epoch_ns // 1000000000
+        print(f"  > Generated {len(fstate)} total forwarding entries")
+        sat_to_gs_entries = sum(1 for (s, d) in fstate.keys() if s < num_satellites and d >= num_satellites)
+        gs_to_gs_entries = sum(1 for (s, d) in fstate.keys() if s >= num_satellites and d >= num_satellites)
+        print(f"    Sat→GS: {sat_to_gs_entries}, GS→GS: {gs_to_gs_entries}")
+        print(f"  > Global k-paths cache size: {len(_global_k_paths_cache)} path sets")
+        print(f"  > Timestep {current_timestep_seconds}s complete")
+    
+    with open(output_filename, "w+") as f_out:
+        for (curr_node, dst_node), (next_hop, my_if, their_if) in fstate.items():
+            f_out.write(f"{curr_node},{dst_node},{next_hop},{my_if},{their_if}\n")
+    
+    return fstate, None

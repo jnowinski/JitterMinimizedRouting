@@ -21,6 +21,7 @@
 # SOFTWARE.
 
 import exputil
+import numpy
 
 try:
     from .run_list import *
@@ -39,13 +40,32 @@ local_shell.make_full_dir("temp/data")
 for run in get_tcp_run_list():
     local_shell.make_full_dir("temp/pdf/" + run["name"])
     local_shell.make_full_dir("temp/data/" + run["name"])
-    local_shell.perfect_exec(
-        "cd ../../ns3-sat-sim/simulator/contrib/basic-sim/tools/plotting/plot_tcp_flow; "
-        "python plot_tcp_flow.py "
-        "../../../../../../../integration_tests/test_jitter_minimized_manila_dalian/temp/runs/" + run["name"]
-        + "/logs_ns3 "
-        "../../../../../../../integration_tests/test_jitter_minimized_manila_dalian/temp/data/" + run["name"] + " "
-        "../../../../../../../integration_tests/test_jitter_minimized_manila_dalian/temp/pdf/" + run["name"] + " "
-        "0 " + str(1 * 1000 * 1000 * 1000),  # Flow 0, 1 * 1000 * 1000 * 1000 ns = 1s interval
-        output_redirect=exputil.OutputRedirect.CONSOLE
-    )
+
+    # UDP burst
+    # for i in range(
+    #         len(numpy.genfromtxt("temp/runs/" + run["name"] + "/logs_ns3/udp_bursts_incoming.csv", delimiter=","))):
+    #     local_shell.perfect_exec(
+    #         "cd ../../ns3-sat-sim/simulator/contrib/basic-sim/tools/plotting/plot_udp_burst; "
+    #         "python plot_udp_burst.py "
+    #         "../../../../../../../integration_tests/test_jitter_minimized_manila_dalian/temp/runs/" + run["name"]
+    #         + "/logs_ns3 "
+    #           "../../../../../../../integration_tests/test_jitter_minimized_manila_dalian/temp/data/" + run["name"]
+    #         + " ../../../../../../../integration_tests/test_jitter_minimized_manila_dalian/temp/pdf/" +
+    #         run["name"] + " "
+    #         + str(i) + " " + str(1 * 1000 * 1000 * 1000),  # Flow 0, 1 * 1000 * 1000 * 1000 ns = 1s interval
+    #         output_redirect=exputil.OutputRedirect.CONSOLE
+    #     )
+
+    # TCP
+    for i in range(len(numpy.genfromtxt("temp/runs/" + run["name"] + "/logs_ns3/tcp_flows.csv", delimiter=","))):
+        local_shell.perfect_exec(
+            "cd ../../ns3-sat-sim/simulator/contrib/basic-sim/tools/plotting/plot_tcp_flow; "
+            "python plot_tcp_flow.py "
+            "../../../../../../../integration_tests/test_jitter_minimized_manila_dalian/temp/runs/" + run["name"]
+            + "/logs_ns3 ../../../../../../../integration_tests/test_jitter_minimized_manila_dalian/temp/data/" + run[
+                "name"] + " "
+                          "../../../../../../../integration_tests/test_jitter_minimized_manila_dalian/temp/pdf/" + run[
+                "name"] + " "
+            + str(i) + " " + str(1 * 1000 * 1000 * 1000),  # Flow 0, 1 * 1000 * 1000 * 1000 ns = 1s interval
+            output_redirect=exputil.OutputRedirect.CONSOLE
+        )

@@ -53,6 +53,7 @@ sudo apt-get install -y \
 # Python dependencies
 pip3 install -r requirements.txt
 ```
+- Python version 3.7-3.11 must be used
 
 ### Setup
 

@@ -10,7 +10,7 @@ sudo apt-get update || exit 1
 
 # satgenpy
 echo "Installing dependencies for satgenpy..."
-pip install numpy astropy ephem networkx sgp4 geopy matplotlib statsmodels || exit 1
+pip install numpy astropy ephem networkx sgp4 geopy matplotlib statsmodels pandas || exit 1
 sudo apt-get install libproj-dev proj-data proj-bin libgeos-dev || exit 1
 # Mac alternatives (to be able to pip install cartopy)
 # brew install proj geos

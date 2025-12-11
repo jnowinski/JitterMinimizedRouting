@@ -56,14 +56,16 @@ def generate_dynamic_state(
         raise ValueError("Offset must be a multiple of time_step_ns")
     prev_output = None
     i = 0
-    total_iterations = ((simulation_end_time_ns - offset_ns) / time_step_ns)
+    total_iterations = int((simulation_end_time_ns - offset_ns) / time_step_ns)
     for time_since_epoch_ns in range(offset_ns, simulation_end_time_ns, time_step_ns):
-        if not enable_verbose_logs:
-            if i % int(math.floor(total_iterations) / 10.0) == 0:
-                print("Progress: calculating for T=%d (time step granularity is still %d ms)" % (
-                    time_since_epoch_ns, time_step_ns / 1000000
-                ))
-            i += 1
+        if enable_verbose_logs:
+            current_timestep_seconds = time_since_epoch_ns // 1000000000
+            print(f"  > Computing timestep {current_timestep_seconds}/{total_iterations}...")
+        elif i % int(math.floor(total_iterations) / 10.0) == 0:
+            print("Progress: calculating for T=%d (time step granularity is still %d ms)" % (
+                time_since_epoch_ns, time_step_ns / 1000000
+            ))
+        i += 1
         prev_output = generate_dynamic_state_at(
             output_dynamic_state_dir,
             epoch,

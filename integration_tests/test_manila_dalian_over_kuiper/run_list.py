@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 # Core values
-dynamic_state_update_interval_ms = 100                          # 100 millisecond update interval
+dynamic_state_update_interval_ms = 1000                         # 1 second update interval (same as multi_flow_comparison)
 simulation_end_time_s = 200                                     # 200 seconds
 enable_isl_utilization_tracking = True                          # Enable utilization tracking
 isl_utilization_tracking_interval_ns = 1 * 1000 * 1000 * 1000   # 1 second utilization intervals
@@ -33,11 +33,15 @@ dynamic_state = "dynamic_state_" + str(dynamic_state_update_interval_ms) + "ms_f
 
 # Chosen pairs:
 # > Manila (17) to Dalian (18)
-full_satellite_network_isls = "reduced_kuiper_630_algorithm_free_one_only_over_isls"
-full_satellite_network_isls_sat_many = "reduced_kuiper_630_algorithm_free_gs_one_sat_many_only_over_isls"
+# Test all three algorithms: Free GS, Naive LMSR (jitter-minimized), Anchor LMSR (jitter-minimized)
+free_gs = "kuiper_630_isls_algorithm_free_gs_one_sat_many_only_over_isls"
+naive_lmsr = "kuiper_630_isls_algorithm_lmsr"
+anchor_lmsr = "kuiper_630_isls_algorithm_jitter_minimized"
+
 chosen_pairs = [
-    ("kuiper_630_isls_sat_one", 17, 18, "TcpNewReno", full_satellite_network_isls),
-    ("kuiper_630_isls_sat_many", 17, 18, "TcpNewReno", full_satellite_network_isls_sat_many),
+    ("free_gs", 17, 18, "TcpNewReno", free_gs),
+    ("naive_lmsr", 17, 18, "TcpNewReno", naive_lmsr),
+    ("anchor_lmsr", 17, 18, "TcpNewReno", anchor_lmsr),
 ]
 
 

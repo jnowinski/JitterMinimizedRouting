@@ -95,6 +95,8 @@ void ArbiterSingleForwardHelper::UpdateForwardingState(int64_t t) {
             int64_t my_if_id = parse_int64(comma_split[3]);
             int64_t next_if_id = parse_int64(comma_split[4]);
 
+            std::cout << line << std::endl;
+
             // Check the node identifiers
             NS_ABORT_MSG_IF(current_node_id < 0 || current_node_id >= m_nodes.GetN(), "Invalid current node id.");
             NS_ABORT_MSG_IF(target_node_id < 0 || target_node_id >= m_nodes.GetN(), "Invalid target node id.");

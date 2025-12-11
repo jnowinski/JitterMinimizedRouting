@@ -33,6 +33,7 @@ cd .. || exit 1
 
 # Coverage report
 if [ "$1" == "" ] || [ "$1" == "--coverage" ] || [ "$2" == "--coverage" ] || [ "$3" == "--coverage" ] || [ "$4" == "--coverage" ]; then
+  echo "Starting coverage report"
 
   # Make coverage report
   rm -rf coverage_report

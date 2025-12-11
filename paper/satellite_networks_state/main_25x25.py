@@ -86,7 +86,8 @@ def calculate(duration_s, time_step_ms, dynamic_state_algorithm, num_threads):
     if dynamic_state_algorithm == "algorithm_free_one_only_over_isls" \
             or dynamic_state_algorithm == "algorithm_free_one_only_gs_relays":
         gsl_interfaces_per_satellite = 1
-    elif dynamic_state_algorithm == "algorithm_paired_many_only_over_isls":
+    elif dynamic_state_algorithm == "algorithm_paired_many_only_over_isls" \
+                or dynamic_state_algorithm == "algorithm_jitter_minimized":
         gsl_interfaces_per_satellite = len(ground_stations)
     else:
         raise ValueError("Unknown dynamic state algorithm")
@@ -98,7 +99,7 @@ def calculate(duration_s, time_step_ms, dynamic_state_algorithm, num_threads):
         len(ground_stations),
         gsl_interfaces_per_satellite,  # GSL interfaces per satellite
         1,  # (GSL) Interfaces per ground station
-        1,  # Aggregate max. bandwidth satellite (unit unspecified)
+        1 * gsl_interfaces_per_satellite,  # Aggregate max. bandwidth satellite (unit unspecified)
         1   # Aggregate max. bandwidth ground station (same unspecified unit)
     )
 

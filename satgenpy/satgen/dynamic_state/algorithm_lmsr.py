@@ -2,12 +2,11 @@ from .fstate_calculation import *
 
 
 class LMSRRouter:
-    def __init__(self, lookahead_steps=10, jitter_threshold=10):
+    def __init__(self, lookahead_steps=10):
         """
         Initialize jitter-minimized router with configurable parameters
         """
         self.lookahead_steps = lookahead_steps
-        self.jitter_threshold = jitter_threshold
 
         # Persistent state
         self.future_graphs_cache = []
@@ -133,7 +132,7 @@ class LMSRRouter:
                                    sat_net_graph_only_satellites_with_isls,
                                    ground_station_satellites_in_range, num_isls_per_sat,
                                    sat_neighbor_to_if, list_gsl_interfaces_info, prev_fstate,
-                                   enable_verbose_logs):
+                                   prev_dist_sat_nets_without_gs, enable_verbose_logs):
         """
         Calculate forwarding state using LMSR algorithm from
         S. Sun, R. Zhang, K. Liu, Z. Sun, Q. Tang, and T. Huang,
@@ -145,20 +144,20 @@ class LMSRRouter:
             print("  > Calculating forwarding state")
 
         # Check the graph (same validation as existing algorithms)
-        if sat_net_graph_only_satellites_with_isls.number_of_nodes() != len(satellites):
-            raise ValueError("Number of nodes in the graph does not match the number of satellites")
-        for sid in range(len(satellites)):
-            for n in sat_net_graph_only_satellites_with_isls.neighbors(sid):
-                if n >= len(satellites):
-                    raise ValueError("Graph cannot contain satellite-to-ground-station links")
+        for graph in sat_net_graph_only_satellites_with_isls:
+            if graph.number_of_nodes() != len(satellites):
+                raise ValueError("Number of nodes in the graph does not match the number of satellites")
+            for sid in range(len(satellites)):
+                for n in graph.neighbors(sid):
+                    if n >= len(satellites):
+                        raise ValueError("Graph cannot contain satellite-to-ground-station links")
 
         # GID to satellite GSL interface index (same as free_gs_one_sat_many_only_over_isls)
         # Each ground station has a GSL interface on every satellite allocated only for itself
         gid_to_sat_gsl_if_idx = list(range(len(ground_stations)))
 
         # Calculate routing paths
-        # TODO: Replace with LMSR path selection
-        fstate = calculate_lmsr_path_without_gs_relaying(
+        fstate, prev_dist_sat_nets_without_gs = calculate_lmsr(
             output_dynamic_state_dir,
             time_since_epoch_ns,
             len(satellites),
@@ -169,13 +168,14 @@ class LMSRRouter:
             ground_station_satellites_in_range,
             sat_neighbor_to_if,
             prev_fstate,
+            prev_dist_sat_nets_without_gs,
             enable_verbose_logs
         )
 
         if enable_verbose_logs:
             print(f"  > Generated forwarding state with {len(fstate)} entries")
 
-        return fstate
+        return fstate, prev_dist_sat_nets_without_gs
 
 
 def algorithm_lmsr(
@@ -268,19 +268,24 @@ def algorithm_lmsr(
     if prev_output is not None:
         prev_fstate = prev_output.get("fstate")
 
+    # Previous floyd-warshall output for graphs with the previous step removed
+    prev_dist_sat_nets_without_gs = None
+    if prev_output is not None:
+        prev_dist_sat_nets_without_gs = prev_output.get("prev_dist_sat_nets_without_gs")
+
     # Calculate forwarding state using the router
-    fstate = router.calculate_forwarding_state(
+    fstate, prev_dist_sat_nets_without_gs = router.calculate_forwarding_state(
         output_dynamic_state_dir,
         time_since_epoch_ns,
         satellites,
         ground_stations,
-        # Need to pass all look-ahead states
-        router.future_graphs_cache[router.current_graph_index]['sat_net_graph_only_satellites_with_isls'],
-        router.future_graphs_cache[router.current_graph_index]['ground_station_satellites_in_range'],
-        router.future_graphs_cache[router.current_graph_index]['num_isls_per_sat'],
-        router.future_graphs_cache[router.current_graph_index]['sat_neighbor_to_if'],
+        [router.future_graphs_cache[(router.current_graph_index + i) % router.lookahead_steps]['sat_net_graph_only_satellites_with_isls'] for i in range(len(router.future_graphs_cache))],
+        [router.future_graphs_cache[(router.current_graph_index + i) % router.lookahead_steps]['ground_station_satellites_in_range'] for i in range(len(router.future_graphs_cache))],
+        [router.future_graphs_cache[(router.current_graph_index + i) % router.lookahead_steps]['num_isls_per_sat'] for i in range(len(router.future_graphs_cache))],
+        [router.future_graphs_cache[(router.current_graph_index + i) % router.lookahead_steps]['sat_neighbor_to_if'] for i in range(len(router.future_graphs_cache))],
         list_gsl_interfaces_info,
         prev_fstate,
+        prev_dist_sat_nets_without_gs,
         enable_verbose_logs
     )
 
@@ -289,5 +294,6 @@ def algorithm_lmsr(
 
     return {
         "fstate": fstate,
+        "prev_dist_sat_nets_without_gs": prev_dist_sat_nets_without_gs,
         "router": router  # Persist state for next time step
     }
